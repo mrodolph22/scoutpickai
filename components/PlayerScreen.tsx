@@ -47,6 +47,9 @@ const PlayerScreen: React.FC = () => {
   const [showAllGames, setShowAllGames] = useState(false);
   const [showAllOpponentGames, setShowAllOpponentGames] = useState(false);
   
+  // Fallback position if roster data is missing
+  const [fallbackPosition, setFallbackPosition] = useState<string>('');
+
   // Scouting State
   const [scoutReport, setScoutReport] = useState<string | null>(null);
   const [scouting, setScouting] = useState(false);
@@ -115,6 +118,8 @@ const PlayerScreen: React.FC = () => {
                         eventsToFetch.map(evt => fetchGameSummary(evt.id).catch(e => null))
                     );
 
+                    let detectedPos = '';
+
                     const processed = summaries.map((summary, index) => {
                         if (!summary || !summary.header || !summary.boxscore) return null;
 
@@ -134,6 +139,12 @@ const PlayerScreen: React.FC = () => {
                                     const athlete = category.athletes.find(a => String(a.athlete.id) === String(playerId));
                                     if (athlete) {
                                         playerTeamId = section.team.id;
+                                        
+                                        // Attempt to detect position from game log if available
+                                        if (athlete.athlete.position?.abbreviation) {
+                                            detectedPos = athlete.athlete.position.abbreviation;
+                                        }
+
                                         const labels = category.labels.map(l => l.toLowerCase());
                                         const ydsIdx = labels.findIndex(l => l === 'yds' || l === 'yards');
                                         const recIdx = labels.findIndex(l => l === 'rec');
@@ -185,6 +196,8 @@ const PlayerScreen: React.FC = () => {
                             totalTd: passTd + rushTd + recTd
                         };
                     }).filter((g): g is ProcessedGame => g !== null);
+
+                    if (detectedPos) setFallbackPosition(detectedPos);
 
                     // Sort descending (newest first)
                     processed.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
@@ -292,7 +305,7 @@ const PlayerScreen: React.FC = () => {
 
 
   // Determine Inputs for Prop Analysis
-  const posAbbr = rosterData?.position?.abbreviation || '';
+  const posAbbr = rosterData?.position?.abbreviation || fallbackPosition || '';
   const isReceiver = ['WR', 'TE'].includes(posAbbr);
   
   // Calculate totals for Game Log columns visibility and Prop Input logic
@@ -311,6 +324,15 @@ const PlayerScreen: React.FC = () => {
           label2: totalRecYds > 0 ? 'Receiving Yds' : '' 
       };
   } else if (isReceiver) {
+      inputLabels = { label1: 'Receptions', label2: 'Receiving Yds' };
+  } else if (totalPassYds > 200 && !posAbbr) {
+      // Fallback for QBs where position is unknown
+      inputLabels = { label1: 'Passing Yds', label2: 'Rushing Yds' };
+  } else if (totalRushYds > 200 && !posAbbr) {
+      // Fallback for RBs where position is unknown
+      inputLabels = { label1: 'Rushing Yds', label2: 'Receiving Yds' };
+  } else if (totalRecYds > 200 && !posAbbr) {
+      // Fallback for WRs/TEs where position is unknown
       inputLabels = { label1: 'Receptions', label2: 'Receiving Yds' };
   }
 
@@ -439,7 +461,7 @@ const PlayerScreen: React.FC = () => {
   // --- Scout Handler ---
 
   const handleScout = async () => {
-    if (!stats || !rosterData || !teamAbbr) return;
+    if (!stats || !teamAbbr) return; // Removed rosterData check
     setScouting(true);
     setScoutReport(null);
     setMatchupHistory(null);
@@ -581,7 +603,7 @@ const PlayerScreen: React.FC = () => {
         }
     }
 
-    const result = await scoutPlayer(stats, rosterData.displayName, rosterData.position.name, opponentContext);
+    const result = await scoutPlayer(stats, rosterData?.displayName || stats.displayName, rosterData?.position?.name || posAbbr || 'Player', opponentContext);
     setScoutReport(result);
     setScouting(false);
   };
@@ -599,7 +621,7 @@ const PlayerScreen: React.FC = () => {
 
   const displayName = rosterData?.displayName || stats.displayName;
   const jersey = rosterData?.jersey || '#';
-  const position = rosterData?.position?.name || 'Player';
+  const position = rosterData?.position?.name || posAbbr || 'Player';
   const height = formatHeight(rosterData?.height || '');
   const weight = rosterData?.weight || '';
   const teamLogoUrl = teamAbbr ? `https://a.espncdn.com/i/teamlogos/nfl/500/${teamAbbr}.png` : null;
@@ -815,6 +837,203 @@ const PlayerScreen: React.FC = () => {
                     </table>
                 </div>
             </div>
+        </div>
+
+        {/* AI Scout Report Section */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+            <div className="flex items-center gap-2 mb-4 pb-2 border-b border-gray-100">
+                <FileText size={18} className="text-blue-500"/>
+                <h3 className="font-bold text-gray-900">Scouting Report</h3>
+            </div>
+            
+            {/* Prop Analysis Inputs */}
+            {showPropInputs && (
+                <div className="mb-4 bg-blue-50/50 p-4 rounded-lg border border-blue-100">
+                    <div className="flex items-center gap-2 mb-3 text-sm font-semibold text-blue-800">
+                        <TrendingUp size={16} />
+                        Stat Analysis (Optional)
+                    </div>
+                    <div className="flex gap-4">
+                        <div className="flex-1">
+                            <label className="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">{inputLabels.label1}</label>
+                            <input 
+                                type="number" 
+                                value={statInput1}
+                                onChange={(e) => setStatInput1(e.target.value)}
+                                placeholder="0"
+                                className="w-full p-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                            />
+                        </div>
+                        {inputLabels.label2 && (
+                            <div className="flex-1">
+                                <label className="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">{inputLabels.label2}</label>
+                                <input 
+                                    type="number" 
+                                    value={statInput2}
+                                    onChange={(e) => setStatInput2(e.target.value)}
+                                    placeholder="0"
+                                    className="w-full p-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                />
+                            </div>
+                        )}
+                        <div className="flex-1">
+                            <label className="block text-xs font-medium text-gray-500 mb-1 uppercase tracking-wide">Anytime TDS</label>
+                            <input 
+                                type="number" 
+                                value={statInputTD}
+                                onChange={(e) => setStatInputTD(e.target.value)}
+                                placeholder="0.5"
+                                className="w-full p-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                            />
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Controls */}
+            <div className="flex flex-col md:flex-row items-center gap-3 mb-6 bg-gray-50 p-3 rounded-lg border border-gray-100">
+                <div className="relative w-full md:flex-1">
+                    <Swords size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                    <select 
+                        value={selectedOpponent}
+                        onChange={(e) => {
+                            setSelectedOpponent(e.target.value);
+                            setScoutReport(null); 
+                            setMatchupHistory(null);
+                        }}
+                        className="w-full pl-9 pr-4 py-2.5 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-colors appearance-none cursor-pointer"
+                    >
+                        <option value="">Select Opponent...</option>
+                        {availableOpponents.map(team => (
+                            <option key={team.id} value={team.id}>vs {team.displayName}</option>
+                        ))}
+                    </select>
+                </div>
+                
+                <button 
+                    onClick={handleScout} 
+                    disabled={scouting || !selectedOpponent || opponentLoading}
+                    className="w-full md:w-auto bg-black text-white px-6 py-2.5 rounded-lg text-sm font-semibold hover:bg-gray-800 disabled:opacity-50 transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
+                >
+                    {scouting ? 'Thinking...' : opponentLoading ? 'Loading Opponent...' : 'Scout Matchup'}
+                </button>
+            </div>
+
+            {/* Opponent Defense Stats Section */}
+            {selectedOpponent && (
+                <div className="mb-6 animate-in fade-in duration-500">
+                     <div className="flex items-center gap-2 mb-3 px-1">
+                        <Shield size={16} className="text-gray-500"/>
+                        <h4 className="font-bold text-gray-800 text-sm">{opponentName} Defense Analysis ({currentSeason})</h4>
+                     </div>
+
+                     {opponentLoading || (leagueStatsLoading && !opponentDefensiveStats) ? (
+                         <div className="flex justify-center py-8 bg-gray-50 rounded-lg border border-gray-100 flex-col items-center">
+                             <Loader2 className="animate-spin text-gray-400 mb-2" size={20} />
+                             {leagueStatsLoading && <span className="text-xs text-gray-400">Aggregating league defensive stats...</span>}
+                         </div>
+                     ) : (
+                         <>
+                            {/* Stats Summary Cards */}
+                            {opponentDefensiveStats ? (
+                                <div className="grid grid-cols-3 gap-3 mb-4">
+                                    <div className="bg-gray-50 p-3 rounded-lg border border-gray-100 text-center flex flex-col items-center justify-center min-h-[90px]">
+                                        <div className="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Pass Allowed</div>
+                                        <div className="text-lg font-bold text-gray-800 leading-tight mb-1">{opponentDefensiveStats.avgPassYards} <span className="text-[10px] text-gray-400 font-normal">YPG</span></div>
+                                        <div className="text-[10px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full mt-1">Rank #{opponentDefensiveStats.rankPass}</div>
+                                    </div>
+                                    <div className="bg-gray-50 p-3 rounded-lg border border-gray-100 text-center flex flex-col items-center justify-center min-h-[90px]">
+                                        <div className="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Rush Allowed</div>
+                                        <div className="text-lg font-bold text-gray-800 leading-tight mb-1">{opponentDefensiveStats.avgRushYards} <span className="text-[10px] text-gray-400 font-normal">YPG</span></div>
+                                        <div className="text-[10px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full mt-1">Rank #{opponentDefensiveStats.rankRush}</div>
+                                    </div>
+                                    <div className="bg-gray-50 p-3 rounded-lg border border-gray-100 text-center flex flex-col items-center justify-center min-h-[90px]">
+                                        <div className="text-[10px] text-gray-400 uppercase font-bold tracking-wider mb-1">Total Allowed</div>
+                                        <div className="text-lg font-bold text-gray-800 leading-tight mb-1">{opponentDefensiveStats.avgTotalYards} <span className="text-[10px] text-gray-400 font-normal">YPG</span></div>
+                                        <div className="text-[10px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded-full mt-1">Rank #{opponentDefensiveStats.rankTotal}</div>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="p-4 text-center text-gray-400 bg-gray-50 rounded-lg mb-4">
+                                    Defensive stats unavailable.
+                                </div>
+                            )}
+
+                            {/* Defense Game Log Table */}
+                            <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+                                <div className="flex justify-between items-center px-4 py-3 border-b border-gray-100 bg-gray-50/50">
+                                    <h3 className="font-bold text-gray-900 text-xs">{opponentName} Defensive Game Stats</h3>
+                                    <div className="flex items-center gap-3">
+                                        <button 
+                                            onClick={() => setShowAllOpponentGames(false)} 
+                                            className={`text-xs font-semibold transition-colors ${!showAllOpponentGames ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
+                                        >
+                                            Last 5
+                                        </button>
+                                        <div className="w-px h-3 bg-gray-300"></div>
+                                        <button 
+                                            onClick={() => setShowAllOpponentGames(true)} 
+                                            className={`text-xs font-semibold transition-colors ${showAllOpponentGames ? 'text-blue-600' : 'text-gray-400 hover:text-gray-600'}`}
+                                        >
+                                            View All
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-left border-collapse">
+                                        <thead>
+                                            <tr className="border-b border-gray-200 bg-gray-50">
+                                                <th className="py-2 px-3 text-[10px] font-bold text-gray-500 uppercase tracking-wider w-16">Date</th>
+                                                <th className="py-2 px-3 text-[10px] font-bold text-gray-500 uppercase tracking-wider w-24">vs Opp</th>
+                                                <th className="py-2 px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider text-right">Pass Allowed</th>
+                                                <th className="py-2 px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider text-right">Rush Allowed</th>
+                                                <th className="py-2 px-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider text-right">Total Allowed</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {opponentGamesToDisplay.length === 0 ? (
+                                                <tr>
+                                                    <td colSpan={5} className="p-6 text-center text-gray-400 text-xs italic">
+                                                        No game data available for {currentSeason}.
+                                                    </td>
+                                                </tr>
+                                            ) : (
+                                                opponentGamesToDisplay.map((game, idx) => {
+                                                    const dateStr = new Date(game.date).toLocaleDateString('en-US', { month: 'numeric', day: 'numeric' });
+                                                    const oppAbbr = game.opponent?.abbreviation || 'OPP';
+                                                    const oppLogo = `https://a.espncdn.com/i/teamlogos/nfl/500/${oppAbbr}.png`;
+                                                    
+                                                    return (
+                                                        <tr key={idx} className="border-b border-gray-50 last:border-0 hover:bg-gray-50 transition-colors h-10">
+                                                            <td className="py-2 px-3 text-xs text-gray-600 font-medium whitespace-nowrap">{dateStr}</td>
+                                                            <td className="py-2 px-3">
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <img src={oppLogo} className="w-4 h-4 object-contain" alt="" onError={(e) => (e.currentTarget.style.display='none')}/>
+                                                                    <span className="text-xs font-bold text-gray-700">{oppAbbr}</span>
+                                                                </div>
+                                                            </td>
+                                                            <td className="py-2 px-2 text-xs text-gray-600 text-right font-medium">{game.passAllowed}</td>
+                                                            <td className="py-2 px-2 text-xs text-gray-600 text-right font-medium">{game.rushAllowed}</td>
+                                                            <td className="py-2 px-2 text-xs text-gray-800 text-right font-bold">{game.totalAllowed}</td>
+                                                        </tr>
+                                                    );
+                                                })
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                         </>
+                     )}
+                </div>
+            )}
+
+            {/* AI Output Text */}
+            {scoutReport && (
+                <div className="bg-blue-50 p-4 rounded-lg text-sm text-gray-800 leading-relaxed whitespace-pre-line border border-blue-100 animate-in fade-in duration-500 mb-6">
+                    {scoutReport}
+                </div>
+            )}
         </div>
 
         {/* Career Stats Tables */}
