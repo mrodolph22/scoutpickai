@@ -1,0 +1,5 @@
+{
+  "name": "NFL Stats & AI Analyst",
+  "description": "A comprehensive NFL stats viewer powered by ESPN API, featuring real-time game summaries, player statistics, and AI-driven match analysis using Google Gemini.",
+  "requestFramePermissions": []
+}
