@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { fetchGameSummary } from '../services/espnService';
+import { analyzeLiveProps, PropAnalysisResponse } from '../services/geminiService';
 import { GameSummary } from '../types';
 import StatTable from './StatTable';
-import { ArrowLeft, Filter } from 'lucide-react';
+import { ArrowLeft, Filter, Ticket, Loader2, AlertCircle, RefreshCcw, BrainCircuit, TrendingUp, TrendingDown, User } from 'lucide-react';
+
+const ODDS_API_BASE = 'https://api.the-odds-api.com/v4/sports/americanfootball_nfl';
 
 const GameScreen: React.FC = () => {
   const { eventId } = useParams<{ eventId: string }>();
@@ -11,6 +14,14 @@ const GameScreen: React.FC = () => {
   const [summary, setSummary] = useState<GameSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedTeamId, setSelectedTeamId] = useState<string>('all');
+
+  // Odds API & AI Analysis State
+  const [oddsApiKey, setOddsApiKey] = useState(localStorage.getItem('ODDS_API_KEY') || '');
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [isKeySubmitted, setIsKeySubmitted] = useState(!!localStorage.getItem('ODDS_API_KEY'));
+  const [error, setError] = useState<string | null>(null);
+  const [aiAnalysis, setAiAnalysis] = useState<PropAnalysisResponse | null>(null);
+  const [selectedBookmaker, setSelectedBookmaker] = useState<string>('draftkings');
 
   useEffect(() => {
     if (eventId) {
@@ -21,17 +32,108 @@ const GameScreen: React.FC = () => {
     }
   }, [eventId]);
 
+  const handleBuildParlay = async () => {
+    if (!oddsApiKey) {
+      setError("Please enter an API key");
+      return;
+    }
+    
+    setIsProcessing(true);
+    setError(null);
+    setAiAnalysis(null);
+    localStorage.setItem('ODDS_API_KEY', oddsApiKey);
+
+    try {
+      // 1. Fetch Event List to Match Game
+      const eventsRes = await fetch(`${ODDS_API_BASE}/events?apiKey=${oddsApiKey}`);
+      if (!eventsRes.ok) {
+        const errorData = await eventsRes.json().catch(() => ({ message: 'Invalid API Key or Rate Limit' }));
+        throw new Error(errorData.message || "Failed to fetch event list.");
+      }
+      const events = await eventsRes.json();
+
+      if (!summary) return;
+      const competition = summary.header.competitions?.[0];
+      const awayTeamDisplayName = competition?.competitors.find(c => c.homeAway === 'away')?.team.displayName;
+      const homeTeamDisplayName = competition?.competitors.find(c => c.homeAway === 'home')?.team.displayName;
+
+      const matchedEvent = events.find((e: any) => 
+        (e.home_team.toLowerCase().includes(homeTeamDisplayName?.toLowerCase() || '') || homeTeamDisplayName?.toLowerCase().includes(e.home_team.toLowerCase())) &&
+        (e.away_team.toLowerCase().includes(awayTeamDisplayName?.toLowerCase() || '') || awayTeamDisplayName?.toLowerCase().includes(e.away_team.toLowerCase()))
+      );
+
+      if (!matchedEvent) {
+        throw new Error("No matching live or upcoming event found in The Odds API for this game.");
+      }
+
+      // 2. Fetch Odds for Matched Event
+      const marketsList = [
+        'player_anytime_td', 'player_pass_yds', 'player_rush_yds', 
+        'player_receptions', 'player_reception_yds'
+      ].join(',');
+
+      const oddsUrl = `${ODDS_API_BASE}/events/${matchedEvent.id}/odds?apiKey=${oddsApiKey}&regions=us&markets=${marketsList}&oddsFormat=american&bookmakers=${selectedBookmaker}`;
+      
+      const oddsRes = await fetch(oddsUrl);
+      if (!oddsRes.ok) {
+        const errorData = await oddsRes.json().catch(() => ({ message: 'Could not fetch odds for this event' }));
+        throw new Error(errorData.message || "Market data fetch failed.");
+      }
+      const oddsData = await oddsRes.json();
+
+      if (!oddsData.bookmakers || oddsData.bookmakers.length === 0) {
+        throw new Error(`The selected bookmaker (${selectedBookmaker}) currently has no active player props for this game. Try another bookmaker.`);
+      }
+
+      // 3. AI Analysis
+      const result = await analyzeLiveProps(oddsData, homeTeamDisplayName || 'Home', awayTeamDisplayName || 'Away');
+      if (!result || !result.analysis || result.analysis.length === 0) {
+        throw new Error("The AI was unable to generate picks. This can happen if the market data is too sparse.");
+      }
+      setAiAnalysis(result);
+    } catch (err: any) {
+      setError(err.message || "An unexpected error occurred during analysis.");
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleKeySubmit = () => {
+    if (!oddsApiKey) {
+      setError("Please enter an API key");
+      return;
+    }
+    setError(null);
+    localStorage.setItem('ODDS_API_KEY', oddsApiKey);
+    setIsKeySubmitted(true);
+  };
+
   const getTeamLogo = (team: { logo?: string; abbreviation: string }) => {
     if (team.logo) return team.logo;
     return `https://a.espncdn.com/i/teamlogos/nfl/500/${team.abbreviation}.png`;
   };
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center text-gray-500">Loading game data...</div>;
+  const getLogoByTeamString = (teamStr: string) => {
+    if (!summary) return null;
+    const comps = summary.header.competitions?.[0]?.competitors || [];
+    const matched = comps.find(c => 
+        c.team.displayName.toLowerCase().includes(teamStr.toLowerCase()) || 
+        teamStr.toLowerCase().includes(c.team.displayName.toLowerCase()) ||
+        c.team.abbreviation.toLowerCase() === teamStr.toLowerCase()
+    );
+    return matched ? getTeamLogo(matched.team) : null;
+  };
+
+  if (loading) return (
+    <div className="min-h-screen flex flex-col items-center justify-center text-gray-500 gap-3">
+        <Loader2 className="animate-spin text-blue-600" size={32} />
+        <p className="text-sm font-medium">Loading game details...</p>
+    </div>
+  );
+  
   if (!summary) return <div className="p-8 text-center text-red-500">Game not found.</div>;
 
   const { header, boxscore } = summary;
-  
-  // Safe access to competition and status (API structure differs slightly between endpoints)
   const competition = header.competitions?.[0];
   const status = competition?.status || header.status;
   
@@ -39,33 +141,41 @@ const GameScreen: React.FC = () => {
       return <div className="p-8 text-center text-gray-500">Game details unavailable.</div>;
   }
 
+  const isCompleted = status.type.completed;
   const competitors = competition.competitors || [];
   const homeComp = competitors.find(c => c.homeAway === 'home');
   const awayComp = competitors.find(c => c.homeAway === 'away');
   
   const homeScore = homeComp?.score || '0';
   const awayScore = awayComp?.score || '0';
-
-  // Safe access to teams in boxscore
   const homeTeamId = homeComp?.team?.id;
   const awayTeamId = awayComp?.team?.id;
 
+  const homeTeamName = homeComp?.team?.displayName || 'Home';
+  const awayTeamName = awayComp?.team?.displayName || 'Away';
+
   const home = boxscore?.teams?.find(t => t.team.id === homeTeamId);
   const away = boxscore?.teams?.find(t => t.team.id === awayTeamId);
-  
-  // If boxscore data is missing (e.g. game hasn't started), handle gracefully
   const hasStats = !!(home && away);
 
-  // Prepare Team Totals Data for StatTable
-  const teamStatRows = hasStats ? away!.statistics.map((stat, idx) => ({
+  const teamStatRows = hasStats ? away!.statistics.map((stat) => ({
     label: stat.label,
     awayValue: stat.displayValue,
     homeValue: home!.statistics.find(s => s.name === stat.name)?.displayValue || '-'
   })) : [];
 
+  const getCategoryLabel = (catName: string) => {
+    const name = catName.toLowerCase();
+    if (name.includes('passing')) return 'Pass Yards';
+    if (name.includes('rushing')) return 'Rush Yards';
+    if (name.includes('receiving')) return 'Rec Yards';
+    if (name.includes('receptions')) return 'Receptions';
+    if (name.includes('td')) return 'TDs';
+    return '';
+  };
+
   return (
     <div className="max-w-3xl mx-auto bg-gray-50 min-h-screen pb-20">
-      {/* Header */}
       <div className="bg-white sticky top-0 z-20 border-b shadow-sm">
         <div className="flex items-center p-4">
           <button 
@@ -79,37 +189,35 @@ const GameScreen: React.FC = () => {
       </div>
 
       <div className="p-4 space-y-6">
-        {/* Score Card with Integrated Team Stats */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
             <div className="p-6">
-                <div className="text-center text-sm font-semibold text-gray-500 mb-4 uppercase tracking-wider">
+                <div className="text-center text-sm font-semibold text-gray-500 mb-4 uppercase tracking-wider flex items-center justify-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${isCompleted ? 'bg-gray-400' : 'bg-green-500 animate-pulse'}`}></span>
                     {status.type.detail}
                 </div>
                 {homeComp && awayComp ? (
                     <div className="flex justify-between items-center px-4">
-                        <div className="flex flex-col items-center w-1/3">
+                        <div className="flex flex-col items-center w-1/3 text-center">
                             <img 
-                            src={getTeamLogo(awayComp.team)} 
-                            alt={awayComp.team.abbreviation} 
-                            className="w-16 h-16 object-contain mb-2" 
-                            onError={(e) => {
-                                (e.target as HTMLImageElement).src = `https://a.espncdn.com/i/teamlogos/nfl/500/${awayComp.team.abbreviation}.png`;
-                            }}
+                                src={getTeamLogo(awayComp.team)} 
+                                alt={awayComp.team.abbreviation} 
+                                className="w-16 h-16 object-contain mb-2" 
+                                onError={(e) => { (e.target as HTMLImageElement).src = `https://a.espncdn.com/i/teamlogos/nfl/500/${awayComp.team.abbreviation}.png`; }}
                             />
-                            <div className="font-bold text-center leading-tight text-gray-900">{awayComp.team.displayName}</div>
+                            <div className="font-bold leading-tight text-gray-900 text-sm md:text-base">{awayComp.team.displayName}</div>
+                            <div className="text-xs text-gray-500 mt-1">{awayComp.records?.[0]?.summary}</div>
                             <div className="text-4xl font-bold mt-2 font-mono text-gray-900">{awayScore}</div>
                         </div>
-                        <div className="text-gray-300 font-light text-3xl">vs</div>
-                        <div className="flex flex-col items-center w-1/3">
+                        <div className="text-gray-300 font-light text-2xl md:text-3xl">vs</div>
+                        <div className="flex flex-col items-center w-1/3 text-center">
                             <img 
-                            src={getTeamLogo(homeComp.team)} 
-                            alt={homeComp.team.abbreviation} 
-                            className="w-16 h-16 object-contain mb-2" 
-                            onError={(e) => {
-                                (e.target as HTMLImageElement).src = `https://a.espncdn.com/i/teamlogos/nfl/500/${homeComp.team.abbreviation}.png`;
-                            }}
+                                src={getTeamLogo(homeComp.team)} 
+                                alt={homeComp.team.abbreviation} 
+                                className="w-16 h-16 object-contain mb-2" 
+                                onError={(e) => { (e.target as HTMLImageElement).src = `https://a.espncdn.com/i/teamlogos/nfl/500/${homeComp.team.abbreviation}.png`; }}
                             />
-                            <div className="font-bold text-center leading-tight text-gray-900">{homeComp.team.displayName}</div>
+                            <div className="font-bold leading-tight text-gray-900 text-sm md:text-base">{homeComp.team.displayName}</div>
+                            <div className="text-xs text-gray-500 mt-1">{homeComp.records?.[0]?.summary}</div>
                             <div className="text-4xl font-bold mt-2 font-mono text-gray-900">{homeScore}</div>
                         </div>
                     </div>
@@ -118,13 +226,12 @@ const GameScreen: React.FC = () => {
                 )}
             </div>
 
-            {/* Team Stats Integrated Here */}
             {hasStats && (
                 <StatTable 
                     title="Team Stats Comparison"
                     collapsible={true}
                     defaultExpanded={false}
-                    className="border-t border-gray-100" // Custom styling to blend with card
+                    className="border-t border-gray-100"
                     columns={[
                         { header: 'Stat', accessor: (row) => row.label, align: 'left', width: 'w-1/3' },
                         { header: away!.team.abbreviation, accessor: (row) => row.awayValue, align: 'center' },
@@ -135,7 +242,154 @@ const GameScreen: React.FC = () => {
             )}
         </div>
 
-        {/* Team Filter for Player Stats */}
+        {!isCompleted && (
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden">
+            <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 flex justify-between items-center">
+              <div className="flex items-center gap-2">
+                <Ticket size={18} className="text-blue-600" />
+                <h3 className="font-bold text-gray-900 text-sm uppercase tracking-tight">Player Stats Parlay Builder</h3>
+              </div>
+            </div>
+            
+            <div className="p-5">
+              <div className="space-y-5">
+                 {!isKeySubmitted ? (
+                   <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
+                      <div>
+                        <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Odds API Key</label>
+                        <div className="flex gap-2">
+                          <input 
+                            type="password"
+                            value={oddsApiKey}
+                            onChange={(e) => setOddsApiKey(e.target.value)}
+                            placeholder="Paste API Key..."
+                            className="flex-1 p-2.5 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none transition-all"
+                          />
+                          <button 
+                            onClick={handleKeySubmit}
+                            className="bg-blue-600 text-white px-6 py-2.5 rounded-lg text-sm font-bold hover:bg-blue-700 transition-colors flex items-center gap-2 whitespace-nowrap shadow-sm active:scale-[0.98]"
+                          >
+                            Submit Key
+                          </button>
+                        </div>
+                      </div>
+                      <p className="text-[10px] text-gray-400 leading-relaxed italic text-center">
+                        Submit your key to reveal parlay tools.
+                      </p>
+                   </div>
+                 ) : (
+                   <div className="space-y-5 animate-in fade-in duration-300">
+                      <div className="flex flex-col md:flex-row gap-4 items-end">
+                        <div className="flex-1 w-full">
+                          <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">Select bookmaker</label>
+                          <select 
+                            value={selectedBookmaker}
+                            onChange={(e) => setSelectedBookmaker(e.target.value)}
+                            className="w-full p-2.5 border border-gray-200 rounded-lg text-sm bg-white focus:ring-2 focus:ring-blue-500 outline-none cursor-pointer"
+                          >
+                            <option value="draftkings">DraftKings</option>
+                            <option value="fanduel">FanDuel</option>
+                            <option value="betonlineag">BetOnline.ag</option>
+                            <option value="betrivers">BetRivers</option>
+                            <option value="betmgm">BetMGM</option>
+                            <option value="bovada">Bovada</option>
+                          </select>
+                        </div>
+                        <button 
+                          onClick={handleBuildParlay}
+                          disabled={isProcessing}
+                          className="w-full md:w-auto bg-black text-white px-8 py-2.5 rounded-lg text-sm font-bold hover:bg-gray-800 transition-all flex items-center justify-center gap-2 shadow-sm active:scale-[0.98] disabled:opacity-70"
+                        >
+                          {isProcessing ? <Loader2 className="animate-spin" size={18} /> : <BrainCircuit size={18} />}
+                          {isProcessing ? 'Analyzing...' : 'Build Parlay'}
+                        </button>
+                      </div>
+
+                      {aiAnalysis && (
+                        <div className="space-y-6 pt-4 border-t border-gray-100 animate-in slide-in-from-top-4 duration-500">
+                           <div className="flex items-center gap-2 px-1 mb-2">
+                              <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
+                                 <BrainCircuit size={18} className="text-blue-600" />
+                              </div>
+                              <div>
+                                 <h4 className="text-sm font-black text-gray-900 uppercase">Game Parlay Picks</h4>
+                                 <p className="text-[10px] text-gray-400 font-bold">{awayTeamName} vs {homeTeamName}</p>
+                              </div>
+                           </div>
+
+                           {aiAnalysis.analysis.map((category, catIdx) => (
+                             <div key={catIdx} className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
+                                <div className="bg-gray-50 px-4 py-2.5 border-b border-gray-200">
+                                   <h3 className="text-[11px] font-black text-gray-500 uppercase tracking-widest">
+                                      {category.categoryName}
+                                   </h3>
+                                </div>
+                                <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-6">
+                                   {category.picks.map((pick, pickIdx) => {
+                                     const teamLogo = getLogoByTeamString(pick.team);
+                                     return (
+                                       <div key={pickIdx} className="flex flex-col h-full">
+                                          <div className="flex justify-between items-start mb-3">
+                                             <div className="flex items-center gap-3">
+                                                <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center border border-gray-100 overflow-hidden shadow-sm p-1">
+                                                   {teamLogo ? (
+                                                      <img src={teamLogo} alt={pick.team} className="w-full h-full object-contain" />
+                                                   ) : (
+                                                      <User size={20} className="text-gray-400" />
+                                                   )}
+                                                </div>
+                                                <div className="min-w-0">
+                                                   <div className="text-sm font-black text-gray-900 leading-tight truncate">{pick.playerName}</div>
+                                                   <div className="text-[10px] text-gray-400 font-bold truncate uppercase tracking-tight">{pick.team}</div>
+                                                </div>
+                                             </div>
+                                             <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-black uppercase shadow-sm ${pick.prediction === 'MORE' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                                {pick.prediction === 'MORE' ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+                                                {pick.prediction}
+                                             </div>
+                                          </div>
+                                          <div className="mb-3 text-center bg-gray-50/50 py-2.5 rounded-xl border border-gray-100">
+                                             <span className="text-sm font-black text-gray-900">
+                                                {category.categoryName.toLowerCase().includes('td') ? '0.5' : pick.line} {getCategoryLabel(category.categoryName)}
+                                             </span>
+                                          </div>
+                                          <div className="bg-gray-50/80 border border-gray-100 rounded-xl p-4 flex-1">
+                                             <p className="text-[11.5px] text-gray-600 leading-relaxed italic">
+                                                "{pick.description}"
+                                             </p>
+                                          </div>
+                                       </div>
+                                     );
+                                   })}
+                                </div>
+                             </div>
+                           ))}
+                        </div>
+                      )}
+
+                      <div className="flex justify-center pt-4 border-t border-gray-100">
+                         <button 
+                          onClick={() => { setIsKeySubmitted(false); setAiAnalysis(null); setError(null); }}
+                          className="text-[10px] text-gray-400 hover:text-red-500 font-black uppercase tracking-widest transition-colors flex items-center gap-2"
+                         >
+                           <RefreshCcw size={12} />
+                           Change API Key
+                         </button>
+                      </div>
+                   </div>
+                 )}
+
+                {error && (
+                  <div className="flex items-start gap-2 text-xs text-red-600 bg-red-50 p-3 rounded-lg border border-red-100 animate-in fade-in zoom-in-95">
+                    <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />
+                    <div>{error}</div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
+
         {hasStats && boxscore?.players && boxscore.players.length > 0 && (
             <div className="flex items-center justify-end gap-2 mb-2">
                 <Filter size={16} className="text-gray-400" />
@@ -154,7 +408,6 @@ const GameScreen: React.FC = () => {
             </div>
         )}
 
-        {/* Player Stats - Grouped by Team then Category */}
         {hasStats && boxscore?.players && (
             <div className="space-y-8">
                 {boxscore.players

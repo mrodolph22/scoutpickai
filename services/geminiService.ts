@@ -1,4 +1,4 @@
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Type } from "@google/genai";
 import { GameSummary, PlayerStats, TeamDetail } from '../types';
 
 const getAiClient = () => {
@@ -10,6 +10,94 @@ const getAiClient = () => {
     return new GoogleGenAI({ apiKey });
 };
 
+export interface PropPick {
+    playerName: string;
+    team: string;
+    line: string;
+    prediction: 'MORE' | 'LESS';
+    description: string;
+}
+
+export interface PropCategoryAnalysis {
+    categoryName: string;
+    picks: PropPick[];
+}
+
+export interface PropAnalysisResponse {
+    analysis: PropCategoryAnalysis[];
+}
+
+export const analyzeLiveProps = async (propsData: any, homeTeam: string, awayTeam: string): Promise<PropAnalysisResponse | null> => {
+    const ai = getAiClient();
+    if (!ai) return null;
+
+    // Filter and prepare the props data for the prompt to keep it relevant
+    const bookmaker = propsData?.bookmakers?.[0];
+    const relevantMarkets = bookmaker?.markets || [];
+    
+    if (relevantMarkets.length === 0) {
+        console.warn("No market data available for analysis.");
+        return null;
+    }
+
+    try {
+        const response = await ai.models.generateContent({
+            model: 'gemini-3-pro-preview',
+            contents: `You are an expert NFL analyst and professional betting consultant. 
+            Analyze the following live player props data from ${bookmaker?.title || 'the selected bookmaker'} for a game between the ${awayTeam} (Away) and ${homeTeam} (Home).
+            
+            CRITICAL INSTRUCTIONS:
+            1. Report on exactly 10 player stats distributed across 5 categories: Passing Yards, Rushing Yards, Receiving Yards, Receptions, and Anytime TD.
+            2. For each category, identify 2 picks: ideally one from the ${homeTeam} and one from the ${awayTeam}.
+            3. For Anytime TD picks, use '0.5' as the line value.
+            4. Each pick must include: Player Name, Team, betting line, a "MORE" or "LESS" prediction (representing Over/Under), and a concise 1-sentence professional justification.
+            5. If a specific team or category is missing data in the provided JSON, make an educated selection based on common knowledge of the star players for those teams, but prioritize using the provided data.
+            
+            MARKET DATA JSON: ${JSON.stringify(relevantMarkets)}`,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        analysis: {
+                            type: Type.ARRAY,
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    categoryName: { type: Type.STRING },
+                                    picks: {
+                                        type: Type.ARRAY,
+                                        items: {
+                                            type: Type.OBJECT,
+                                            properties: {
+                                                playerName: { type: Type.STRING },
+                                                team: { type: Type.STRING },
+                                                line: { type: Type.STRING },
+                                                prediction: { type: Type.STRING, enum: ['MORE', 'LESS'] },
+                                                description: { type: Type.STRING }
+                                            },
+                                            required: ['playerName', 'team', 'line', 'prediction', 'description']
+                                        }
+                                    }
+                                },
+                                required: ['categoryName', 'picks']
+                            }
+                        }
+                    },
+                    required: ['analysis']
+                }
+            }
+        });
+
+        const text = response.text;
+        if (!text) return null;
+        return JSON.parse(text) as PropAnalysisResponse;
+    } catch (error) {
+        console.error("Gemini Prop Analysis Failed", error);
+        return null;
+    }
+};
+
 export const analyzeGame = async (summary: GameSummary): Promise<string> => {
     const ai = getAiClient();
     if (!ai) return "API Key missing. Cannot generate analysis.";
@@ -17,7 +105,6 @@ export const analyzeGame = async (summary: GameSummary): Promise<string> => {
     const awayTeam = summary.boxscore.teams[0].team.displayName;
     const homeTeam = summary.boxscore.teams[1].team.displayName;
     
-    // Simplification of data for the prompt to save tokens and reduce noise
     const context = {
         matchup: `${awayTeam} vs ${homeTeam}`,
         score: `${summary.header.competitions[0].competitors.find(c => c.homeAway === 'away')?.score} - ${summary.header.competitions[0].competitors.find(c => c.homeAway === 'home')?.score}`,
@@ -30,13 +117,13 @@ export const analyzeGame = async (summary: GameSummary): Promise<string> => {
             leaders: team.statistics.map(cat => ({
                 category: cat.name,
                 topPerformer: cat.athletes[0] ? `${cat.athletes[0].athlete.displayName} (${cat.athletes[0].stats.join(', ')})` : 'N/A'
-            })).slice(0, 3) // Only take top 3 categories (usually passing, rushing, receiving)
+            })).slice(0, 3) 
         }))
     };
 
     try {
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model: 'gemini-3-flash-preview',
             contents: `You are an expert NFL analyst. Analyze this game summary JSON and provide a concise 3-paragraph report. 
             1. Game Flow & Outcome: Who won and why? Key turning points.
             2. Stat Breakdown: Compare total yards, turnovers, and efficiency.
@@ -77,7 +164,6 @@ export const scoutPlayer = async (
     const ai = getAiClient();
     if (!ai) return "API Key missing. Cannot generate report.";
 
-    // Extract last 3 years of data, sorting by year descending to ensure we get the MOST RECENT
     const recentStats = stats.categories.map(cat => {
         const sortedStats = [...cat.statistics].sort((a, b) => b.season.year - a.season.year);
         return {
@@ -101,10 +187,7 @@ export const scoutPlayer = async (
             hasHistory = true;
             historyText = context.matchupHistory.map((h: any) => {
                 const date = new Date(h.date).toLocaleDateString();
-                
-                // Fix: Handle stats being an object (map) instead of array to prevent "Stats unavailable"
                 const statsList = Array.isArray(h.stats) ? h.stats : Object.values(h.stats || {});
-
                 const statsBlock = statsList.length > 0 
                     ? statsList.map((cat: any) => {
                          const pairs = cat.labels.map((l: string, i: number) => `${l}: ${cat.stats[i]}`).join(', ');
@@ -120,7 +203,6 @@ export const scoutPlayer = async (
             ? context.last5Games.map((g: any) => `[${new Date(g.date).toLocaleDateString()}] vs ${g.opponent} - Pass: ${g.passYds}, Rush: ${g.rushYds}, Rec Yds: ${g.recYds}, Recs: ${g.receptions || 'N/A'}, TDs: ${g.totalTd}`).join('\n')
             : "No recent games available.";
 
-        // Format Opponent Defense Stats
         let defenseStatsText = "Defense stats unavailable.";
         if (context.opponentSeasonStats) {
             const d = context.opponentSeasonStats;
@@ -132,7 +214,6 @@ export const scoutPlayer = async (
             `;
         }
 
-        // Format Opponent Last 5 Games
         const oppLast5Log = context.opponentLast5Games && context.opponentLast5Games.length > 0
             ? context.opponentLast5Games.map((g: any) => 
                 `[${new Date(g.date).toLocaleDateString()}] vs ${g.opponent?.abbreviation || 'OPP'} - Allowed: Pass ${g.passAllowed}, Rush ${g.rushAllowed}, Total ${g.totalAllowed}`
@@ -193,7 +274,7 @@ export const scoutPlayer = async (
 
     try {
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash',
+            model: 'gemini-3-flash-preview',
             contents: `${prompt}
             
             **Recent Season Stats (Sorted Newest to Oldest):** 
