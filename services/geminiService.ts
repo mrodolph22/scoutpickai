@@ -3,7 +3,6 @@ import { GameSummary, PlayerStats, TeamDetail } from '../types';
 
 const getAiClient = () => {
     const apiKey = process.env.API_KEY;
-    // const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
     if (!apiKey) {
         console.warn("API_KEY is not set in environment variables.");
         return null;
