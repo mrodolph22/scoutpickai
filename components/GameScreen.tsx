@@ -1,3 +1,4 @@
+
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { fetchGameSummary } from '../services/espnService';
@@ -222,29 +223,33 @@ const GameScreen: React.FC = () => {
                     {status.type.detail}
                 </div>
                 {homeComp && awayComp ? (
-                    <div className="flex justify-between items-center px-4">
-                        <div className="flex flex-col items-center w-1/3 text-center">
-                            <img 
-                                src={getTeamLogo(awayComp.team)} 
-                                alt={awayComp.team.abbreviation} 
-                                className="w-16 h-16 object-contain mb-2" 
-                                onError={(e) => { (e.target as HTMLImageElement).src = `https://a.espncdn.com/i/teamlogos/nfl/500/${awayComp.team.abbreviation}.png`; }}
-                            />
-                            <div className="font-bold leading-tight text-gray-900 text-sm md:text-base">{awayComp.team.displayName}</div>
-                            <div className="text-xs text-gray-500 mt-1">{awayComp.records?.[0]?.summary}</div>
-                            <div className="text-4xl font-bold mt-2 font-mono text-gray-900">{awayScore}</div>
+                    <div className="relative">
+                        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-0">
+                            <span className="text-xl md:text-2xl font-black text-gray-100 italic tracking-tighter">VS</span>
                         </div>
-                        <div className="text-gray-300 font-light text-2xl md:text-3xl">vs</div>
-                        <div className="flex flex-col items-center w-1/3 text-center">
-                            <img 
-                                src={getTeamLogo(homeComp.team)} 
-                                alt={homeComp.team.abbreviation} 
-                                className="w-16 h-16 object-contain mb-2" 
-                                onError={(e) => { (e.target as HTMLImageElement).src = `https://a.espncdn.com/i/teamlogos/nfl/500/${homeComp.team.abbreviation}.png`; }}
-                            />
-                            <div className="font-bold leading-tight text-gray-900 text-sm md:text-base">{homeComp.team.displayName}</div>
-                            <div className="text-xs text-gray-500 mt-1">{homeComp.records?.[0]?.summary}</div>
-                            <div className="text-4xl font-bold mt-2 font-mono text-gray-900">{homeScore}</div>
+                        <div className="grid grid-cols-2 gap-4 md:gap-8 relative z-10">
+                            <div className="flex flex-col items-center text-center">
+                                <img 
+                                    src={getTeamLogo(awayComp.team)} 
+                                    alt={awayComp.team.abbreviation} 
+                                    className="w-16 h-16 object-contain mb-2" 
+                                    onError={(e) => { (e.target as HTMLImageElement).src = `https://a.espncdn.com/i/teamlogos/nfl/500/${awayComp.team.abbreviation}.png`; }}
+                                />
+                                <div className="font-bold leading-tight text-gray-900 text-sm md:text-base">{awayComp.team.displayName}</div>
+                                <div className="text-xs text-gray-500 mt-1">{awayComp.records?.[0]?.summary}</div>
+                                <div className="text-4xl font-bold mt-2 font-mono text-gray-900">{awayScore}</div>
+                            </div>
+                            <div className="flex flex-col items-center text-center">
+                                <img 
+                                    src={getTeamLogo(homeComp.team)} 
+                                    alt={homeComp.team.abbreviation} 
+                                    className="w-16 h-16 object-contain mb-2" 
+                                    onError={(e) => { (e.target as HTMLImageElement).src = `https://a.espncdn.com/i/teamlogos/nfl/500/${homeComp.team.abbreviation}.png`; }}
+                                />
+                                <div className="font-bold leading-tight text-gray-900 text-sm md:text-base">{homeComp.team.displayName}</div>
+                                <div className="text-xs text-gray-500 mt-1">{homeComp.records?.[0]?.summary}</div>
+                                <div className="text-4xl font-bold mt-2 font-mono text-gray-900">{homeScore}</div>
+                            </div>
                         </div>
                     </div>
                 ) : (
@@ -350,11 +355,20 @@ const GameScreen: React.FC = () => {
                                       {category.categoryName}
                                    </h3>
                                 </div>
-                                <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-6">
-                                   {category.picks.map((pick, pickIdx) => {
+                                <div className="p-4 grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-8">
+                                   {[...category.picks].sort((a, b) => {
+                                       // Sort: Away Team Pick Left, Home Team Pick Right
+                                       const aIsAway = a.team.toLowerCase().includes(awayComp?.team.abbreviation.toLowerCase() || '') || 
+                                                       a.team.toLowerCase().includes(awayComp?.team.displayName.toLowerCase() || '');
+                                       const bIsAway = b.team.toLowerCase().includes(awayComp?.team.abbreviation.toLowerCase() || '') || 
+                                                       b.team.toLowerCase().includes(awayComp?.team.displayName.toLowerCase() || '');
+                                       if (aIsAway && !bIsAway) return -1;
+                                       if (!aIsAway && bIsAway) return 1;
+                                       return 0;
+                                   }).map((pick, pickIdx) => {
                                      const teamLogo = getLogoByTeamString(pick.team);
                                      return (
-                                       <div key={pickIdx} className="flex flex-col h-full">
+                                       <div key={pickIdx} className="flex flex-col h-full border-b md:border-b-0 border-gray-100 last:border-0 pb-4 md:pb-0">
                                           <div className="flex justify-between items-start mb-3">
                                              <div className="flex items-center gap-3">
                                                 <div className="w-10 h-10 bg-white rounded-full flex items-center justify-center border border-gray-100 overflow-hidden shadow-sm p-1">
