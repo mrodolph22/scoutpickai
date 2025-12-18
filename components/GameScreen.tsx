@@ -43,25 +43,28 @@ const GameScreen: React.FC = () => {
     setAiAnalysis(null);
     localStorage.setItem('ODDS_API_KEY', oddsApiKey);
 
-    console.info("[Parlay] Starting parlay build process...");
+    console.info("[Parlay Builder] Initializing analysis workflow...");
 
     try {
       // 1. Fetch Event List to Match Game
       const eventsRes = await fetch(`${ODDS_API_BASE}/events?apiKey=${oddsApiKey}`);
       if (!eventsRes.ok) {
         const errorData = await eventsRes.json().catch(() => ({ message: 'Invalid API Key or Rate Limit' }));
-        console.error("[Parlay] Odds API events fetch failed:", errorData);
+        console.error("[Parlay Builder] Odds API events list fetch failed:", errorData);
         throw new Error(errorData.message || "Failed to fetch event list.");
       }
       const events = await eventsRes.json();
-      console.debug("[Parlay DEBUG] Fetched events count:", events.length);
+      console.debug("[Parlay Builder DEBUG] Events list size from Odds API:", events.length);
 
-      if (!summary) return;
+      if (!summary) {
+        console.error("[Parlay Builder ERROR] No ESPN summary found for eventId:", eventId);
+        return;
+      }
       const competition = summary.header.competitions?.[0];
       const awayTeamDisplayName = competition?.competitors.find(c => c.homeAway === 'away')?.team.displayName;
       const homeTeamDisplayName = competition?.competitors.find(c => c.homeAway === 'home')?.team.displayName;
 
-      console.debug("[Parlay DEBUG] Attempting to match teams:", { away: awayTeamDisplayName, home: homeTeamDisplayName });
+      console.debug("[Parlay Builder DEBUG] Attempting to match teams from Odds API:", { away: awayTeamDisplayName, home: homeTeamDisplayName });
 
       const matchedEvent = events.find((e: any) => 
         (e.home_team.toLowerCase().includes(homeTeamDisplayName?.toLowerCase() || '') || homeTeamDisplayName?.toLowerCase().includes(e.home_team.toLowerCase())) &&
@@ -69,11 +72,11 @@ const GameScreen: React.FC = () => {
       );
 
       if (!matchedEvent) {
-        console.warn("[Parlay] No matching event found in events list for:", { home: homeTeamDisplayName, away: awayTeamDisplayName });
+        console.warn("[Parlay Builder] Matching failed. No Odds API event corresponds to:", { home: homeTeamDisplayName, away: awayTeamDisplayName });
         throw new Error("No matching live or upcoming event found in The Odds API for this game.");
       }
 
-      console.info("[Parlay] Matched event found:", matchedEvent.id, matchedEvent.home_team, "vs", matchedEvent.away_team);
+      console.info("[Parlay Builder] Found matched event ID in Odds API:", matchedEvent.id);
 
       // 2. Fetch Odds for Matched Event
       const marketsList = [
@@ -83,35 +86,38 @@ const GameScreen: React.FC = () => {
 
       const oddsUrl = `${ODDS_API_BASE}/events/${matchedEvent.id}/odds?apiKey=${oddsApiKey}&regions=us&markets=${marketsList}&oddsFormat=american&bookmakers=${selectedBookmaker}`;
       
-      console.debug("[Parlay DEBUG] Fetching odds from:", oddsUrl);
+      console.debug("[Parlay Builder DEBUG] Requesting odds data payload from:", oddsUrl);
 
       const oddsRes = await fetch(oddsUrl);
       if (!oddsRes.ok) {
         const errorData = await oddsRes.json().catch(() => ({ message: 'Could not fetch odds for this event' }));
-        console.error("[Parlay] Odds API odds fetch failed:", errorData);
+        console.error("[Parlay Builder] Odds API specific event odds fetch failed:", errorData);
         throw new Error(errorData.message || "Market data fetch failed.");
       }
       const oddsData = await oddsRes.json();
-      console.debug("[Parlay DEBUG] Odds data received:", oddsData);
+      console.debug("[Parlay Builder DEBUG] Full raw odds JSON received:", oddsData);
 
       if (!oddsData.bookmakers || oddsData.bookmakers.length === 0) {
-        console.warn("[Parlay] No bookmakers found in oddsData for:", selectedBookmaker);
-        throw new Error(`The selected bookmaker (${selectedBookmaker}) currently has no active player props for this game. Try another bookmaker.`);
+        console.warn("[Parlay Builder] No active bookmaker markets found for bookie:", selectedBookmaker);
+        throw new Error(`The selected bookmaker (${selectedBookmaker}) currently has no active player props for this game. Try switching bookmakers.`);
       }
 
+      const marketCount = oddsData.bookmakers[0]?.markets?.length || 0;
+      console.debug(`[Parlay Builder DEBUG] Retained ${marketCount} markets for AI analysis.`);
+
       // 3. AI Analysis
-      console.info("[Parlay] Passing odds data to AI for analysis...");
+      console.info("[Parlay Builder] Handing data off to Gemini AI...");
       const result = await analyzeLiveProps(oddsData, homeTeamDisplayName || 'Home', awayTeamDisplayName || 'Away');
       
       if (!result || !result.analysis || result.analysis.length === 0) {
-        console.error("[Parlay] AI returned null or empty analysis result.");
+        console.error("[Parlay Builder ERROR] AI returned an empty or invalid pick list.");
         throw new Error("The AI was unable to generate picks. This can happen if the market data is too sparse.");
       }
       
-      console.info("[Parlay] AI analysis completed successfully.");
+      console.info("[Parlay Builder] Parlay picks generated successfully.");
       setAiAnalysis(result);
     } catch (err: any) {
-      console.error("[Parlay ERROR] Build failed:", err);
+      console.error("[Parlay Builder FATAL ERROR]", err);
       setError(err.message || "An unexpected error occurred during analysis.");
     } finally {
       setIsProcessing(false);

@@ -102,7 +102,7 @@ export const analyzeLiveProps = async (propsData: any, homeTeam: string, awayTea
         });
 
         const text = response.text;
-        console.debug("[AI DEBUG] Raw Response Text:", text);
+        console.debug("[AI DEBUG] Raw Response Text Received:", text);
 
         if (!text) {
             console.error("[AI ERROR] Gemini returned an empty response text.");
@@ -110,10 +110,10 @@ export const analyzeLiveProps = async (propsData: any, homeTeam: string, awayTea
         }
 
         const parsed = JSON.parse(text) as PropAnalysisResponse;
-        console.debug("[AI DEBUG] Parsed Analysis:", parsed);
+        console.debug("[AI DEBUG] Parsed Analysis Successfully:", parsed);
         return parsed;
     } catch (error) {
-        console.error("[AI ERROR] Gemini Prop Analysis Failed", error);
+        console.error("[AI ERROR] Gemini Prop Analysis Failed during execution", error);
         return null;
     }
 };

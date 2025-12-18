@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { fetchScoreboard } from '../services/espnService';
 import { SeasonType, EspnEvent } from '../types';
 import GameCard from './GameCard';
-import { Loader2, RefreshCw, Github } from 'lucide-react';
+import { Loader2, RefreshCw } from 'lucide-react';
 
 const GamesScreen: React.FC = () => {
   const navigate = useNavigate();
@@ -38,18 +38,8 @@ const GamesScreen: React.FC = () => {
   return (
     <div className="max-w-2xl mx-auto pb-20">
       <div className="bg-white shadow-sm border-b sticky top-0 z-10 p-4">
-        <div className="flex items-center justify-between mb-4 px-1">
-          <div className="w-8"></div> {/* Spacer for symmetry */}
+        <div className="flex items-center justify-center mb-4 px-1">
           <h1 className="text-xl font-bold text-gray-900 tracking-tight">NFL Scoreboard</h1>
-          <a 
-            href="https://github.com/mrodolph22/scoutpickai" 
-            target="_blank" 
-            rel="noopener noreferrer"
-            className="p-2 text-gray-400 hover:text-black transition-all rounded-full hover:bg-gray-100 active:scale-95"
-            title="View Source on GitHub"
-          >
-            <Github size={20} />
-          </a>
         </div>
         
         <div className="flex flex-col sm:flex-row gap-3">
