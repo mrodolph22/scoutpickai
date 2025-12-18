@@ -29,16 +29,28 @@ export interface PropAnalysisResponse {
 
 export const analyzeLiveProps = async (propsData: any, homeTeam: string, awayTeam: string): Promise<PropAnalysisResponse | null> => {
     const ai = getAiClient();
-    if (!ai) return null;
+    if (!ai) {
+        console.error("[AI] Failed to initialize GoogleGenAI client. Check API key.");
+        return null;
+    }
 
     // Filter and prepare the props data for the prompt to keep it relevant
     const bookmaker = propsData?.bookmakers?.[0];
     const relevantMarkets = bookmaker?.markets || [];
     
     if (relevantMarkets.length === 0) {
-        console.warn("No market data available for analysis.");
+        console.warn("[AI] No market data available in propsData for analysis.");
         return null;
     }
+
+    const payload = JSON.stringify(relevantMarkets);
+    console.debug("[AI DEBUG] Sending Market Data to Gemini:", {
+        homeTeam,
+        awayTeam,
+        bookmaker: bookmaker?.title,
+        marketCount: relevantMarkets.length,
+        payloadSize: payload.length
+    });
 
     try {
         const response = await ai.models.generateContent({
@@ -53,7 +65,7 @@ export const analyzeLiveProps = async (propsData: any, homeTeam: string, awayTea
             4. Each pick must include: Player Name, Team, betting line, a "MORE" or "LESS" prediction (representing Over/Under), and a concise 1-sentence professional justification.
             5. If a specific team or category is missing data in the provided JSON, make an educated selection based on common knowledge of the star players for those teams, but prioritize using the provided data.
             
-            MARKET DATA JSON: ${JSON.stringify(relevantMarkets)}`,
+            MARKET DATA JSON: ${payload}`,
             config: {
                 responseMimeType: "application/json",
                 responseSchema: {
@@ -90,10 +102,18 @@ export const analyzeLiveProps = async (propsData: any, homeTeam: string, awayTea
         });
 
         const text = response.text;
-        if (!text) return null;
-        return JSON.parse(text) as PropAnalysisResponse;
+        console.debug("[AI DEBUG] Raw Response Text:", text);
+
+        if (!text) {
+            console.error("[AI ERROR] Gemini returned an empty response text.");
+            return null;
+        }
+
+        const parsed = JSON.parse(text) as PropAnalysisResponse;
+        console.debug("[AI DEBUG] Parsed Analysis:", parsed);
+        return parsed;
     } catch (error) {
-        console.error("Gemini Prop Analysis Failed", error);
+        console.error("[AI ERROR] Gemini Prop Analysis Failed", error);
         return null;
     }
 };
