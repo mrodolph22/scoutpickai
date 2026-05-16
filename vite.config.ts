@@ -11,8 +11,10 @@ export default defineConfig(({ mode }) => {
       },
       plugins: [react()],
       define: {
-        'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-        'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
+        // NOTE: Do NOT expose API keys to the client bundle.
+        // GEMINI_API_KEY should only be used on a secure backend.
+        // Removed: 'process.env.API_KEY' and 'process.env.GEMINI_API_KEY'
+        // See: https://github.com/mrodolph22/scoutpickai/security
       },
       resolve: {
         alias: {
